@@ -1,0 +1,67 @@
+#!/bin/bash
+
+# Set Bash "strict" mode
+# see: http://redsymbol.net/articles/unofficial-bash-strict-mode/
+set -euo pipefail
+IFS=$'\n\t'
+
+if [ -f oauth-app-config ] ; then
+  . oauth-app-config
+fi
+
+# check that all variables are set
+# we need to temporarily allow for unset variables
+set +u
+for var_name in CLIENT_ID_MBSYNC CLIENT_ID_POSTFIX TENANT_ID EMAIL ; do
+  if [ -z "${!var_name}" ] ; then
+    echo "Variable $var_name is not set!"
+    echo "Either set it in ./oauth-app-config or the environment."
+    exit 1
+  fi
+done
+set -u
+
+create_token() {
+  token_type=$1
+  client_id=$2
+  token_generated=token.$EMAIL.$token_type
+
+  echo "Generating token for $token_type"
+  echo "Follow the instruction printed and log into your account $EMAIL"
+  sasl-xoauth2-tool get-token outlook \
+     token.$EMAIL \
+     --client-id=$client_id \
+     --tenant=$TENANT_ID \
+     --use-device-flow
+
+  cat token.$EMAIL | jq '. += { 
+    "client_secret": "",
+    "token_endpoint": "https://login.microsoftonline.com/'$TENANT_ID'/oauth2/v2.0/token",
+    "client_id": "'$client_id'"
+  }' > $token_generated
+
+  echo "Token generated - let us verify it works."
+  echo "You are supposed to see:"
+  echo "   Config check passed."
+  echo "   Token refresh succeeded."
+  sasl-xoauth2-tool test-token-refresh $token_generated
+
+  if [ $? -eq 0 ] ; do
+    rm -f token.$EMAIL
+    echo $token_generated >&2
+  else
+    echo "Refreshing the token did not succeed, terminating here!"
+    exit 1
+  fi
+}
+
+# Explanation for 3>&1 1>&2 2>&3 3>&-
+# capture only stderr by redirecting stderr to stdout and stdout to stderr
+mbsync=$(create_token mbsync $CLIENT_ID_MBSYNC 3>&1 1>&2 2>&3 3>&-)
+echo "Generated $mbsync"
+echo "You need to move $mbsync to ~/.tokens/$EMAIL"
+
+postfix=$(create_token postfix $CLIENT_ID_POSTFIX 3>&1 1>&2 2>&3 3>&-)
+echo "Generated $postfix"
+echo "You need to move $postfix to /etc/sasl-tokens/$EMAIL"
+
