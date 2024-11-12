@@ -3,7 +3,8 @@
 # Set Bash "strict" mode
 # see: http://redsymbol.net/articles/unofficial-bash-strict-mode/
 set -euo pipefail
-IFS=$'\n\t'
+# Don't take out space from IFS, otherwise our addargs does not work!
+#IFS=$'\n\t'
 
 if [ -f oauth-app-config ] ; then
   . oauth-app-config
@@ -22,23 +23,38 @@ done
 set -u
 
 create_token() {
-  token_type=$1
-  client_id=$2
-  token_generated=token.$EMAIL.$token_type
+  provider=$1 # gmail or outlook
+  token_type=$2
+  client_id=$3
+  client_secret=${4:-""}
+  token_generated=token.$EMAIL.$provider.$token_type
 
-  echo "Generating token for $token_type"
+  echo "Generating token for $token_type at provider $provider"
   echo "Follow the instruction printed and log into your account $EMAIL"
-  sasl-xoauth2-tool get-token outlook \
-     token.$EMAIL \
-     --client-id=$client_id \
-     --tenant=$TENANT_ID \
-     --use-device-flow
+  if [ $provider = outlook ] ; then
+    add_args="--tenant=$TENANT_ID --use-device-flow"
+  elif [ $provider = gmail ] ; then
+    add_args="--client-secret=${client_secret} --scope=https://mail.google.com/"
+  else
+    echo "Unkown provider, exiting!" >&2
+    exit 1
+  fi
 
-  cat token.$EMAIL | jq '. += { 
-    "client_secret": "",
-    "token_endpoint": "https://login.microsoftonline.com/'$TENANT_ID'/oauth2/v2.0/token",
-    "client_id": "'$client_id'"
-  }' > $token_generated
+  sasl-xoauth2-tool get-token $provider token.$EMAIL --client-id=$client_id $add_args
+
+  if [ $provider = outlook ] ; then
+    cat token.$EMAIL | jq '. += { 
+      "client_secret": "",
+      "token_endpoint": "https://login.microsoftonline.com/'$TENANT_ID'/oauth2/v2.0/token",
+      "client_id": "'$client_id'"
+    }' > $token_generated
+  elif [ $provider = gmail ] ; then
+    cat token.$EMAIL | jq '. += { 
+      "client_secret": "'$client_secret'",
+      "client_id": "'$client_id'"
+    }' > $token_generated
+  fi
+
 
   echo "Token generated - let us verify it works."
   echo "You are supposed to see:"
@@ -46,7 +62,7 @@ create_token() {
   echo "   Token refresh succeeded."
   sasl-xoauth2-tool test-token-refresh $token_generated
 
-  if [ $? -eq 0 ] ; do
+  if [ $? -eq 0 ] ; then
     rm -f token.$EMAIL
     echo $token_generated >&2
   else
@@ -57,11 +73,11 @@ create_token() {
 
 # Explanation for 3>&1 1>&2 2>&3 3>&-
 # capture only stderr by redirecting stderr to stdout and stdout to stderr
-mbsync=$(create_token mbsync $CLIENT_ID_MBSYNC 3>&1 1>&2 2>&3 3>&-)
+mbsync=$(create_token outlook mbsync $CLIENT_ID_MBSYNC 3>&1 1>&2 2>&3 3>&-)
 echo "Generated $mbsync"
 echo "You need to move $mbsync to ~/.tokens/$EMAIL"
 
-postfix=$(create_token postfix $CLIENT_ID_POSTFIX 3>&1 1>&2 2>&3 3>&-)
+postfix=$(create_token outlook postfix $CLIENT_ID_POSTFIX 3>&1 1>&2 2>&3 3>&-)
 echo "Generated $postfix"
 echo "You need to move $postfix to /etc/sasl-tokens/$EMAIL"
 

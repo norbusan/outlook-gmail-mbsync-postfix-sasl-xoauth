@@ -287,7 +287,7 @@ PassCmd "echo ~/.tokens/${your_email}"
 SSLType IMAPS
 AuthMechs XOAUTH2
 ```
-(as usual, replacing the ${your_email} with the actual email.
+(as usual, replacing the `${your_email}` with the actual email.
 
 With that in place,
 ```
